@@ -1,0 +1,80 @@
+# Ask Sylabus AGH — self-hosted, w 100% lokalnie.
+#
+# Uruchomienie:
+#   cp .env.example .env
+#   docker compose up --build
+#   # ściągnij modele (jednorazowo, ~3.5 GB):
+#   docker compose exec ollama ollama pull qwen2.5:3b
+#   docker compose exec ollama ollama pull nomic-embed-text
+#   # otwórz http://localhost:8080
+#
+# Trzy usługi: postgres (baza + pgvector), ollama (lokalny LLM), app (Node/TanStack Start).
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: sylabus-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-sylabus}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sylabus}
+      POSTGRES_DB: ${POSTGRES_DB:-sylabus}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sylabus} -d ${POSTGRES_DB:-sylabus}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: sylabus-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    # Jeśli masz GPU NVIDIA — odkomentuj poniższe (i zainstaluj nvidia-container-toolkit):
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  app:
+    build:
+      context: .
+    image: sylabus-app:latest
+    container_name: sylabus-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    ports:
+      - "${PORT:-8080}:8080"
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-sylabus}:${POSTGRES_PASSWORD:-sylabus}@postgres:5432/${POSTGRES_DB:-sylabus}
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://ollama:11434/v1}
+      LLM_API_KEY: ${LLM_API_KEY:-ollama}
+      CHAT_MODEL: ${CHAT_MODEL:-qwen2.5:3b}
+      EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text}
+      TOP_K: ${TOP_K:-5}
+      PDF_STORAGE_DIR: /data/pdfs
+      PORT: "8080"
+      NODE_ENV: production
+    volumes:
+      - ./data/pdfs:/data/pdfs
+
+volumes:
+  pg-data:
+  ollama-data:
