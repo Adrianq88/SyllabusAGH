@@ -295,8 +295,8 @@ export const Route = createFileRoute("/api/chat")({
           ];
           // OpenAI API: max_tokens = total sequence length (prompt + response).
           // Estimate prompt tokens (chars/4) and add 350 for the response budget.
-          const promptTokens = messages.reduce((s, m) => s + Math.ceil(m.content.length / 3), 0);
-          const maxTokens = promptTokens + 350;
+          const promptTokens = messages.reduce((s, m) => s + m.content.length, 0);
+          const maxTokens = promptTokens + 1024;
           console.log("[chat] sending to LLM model=%s sources=%d prompt_tokens~=%d max_tokens=%d", chatModel, sources.length, promptTokens, maxTokens);
           const stream = await client.chat.completions.create({
             model: chatModel,
