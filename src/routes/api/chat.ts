@@ -48,6 +48,7 @@ Zasady:
 - Jeśli pytanie jest ogólne (np. "hej", "cześć"), przywitaj się krótko po polsku i zapytaj o co konkretnie chodzi — NIE streszczaj kontekstu.
 - Jeśli kontekst nie zawiera odpowiedzi, powiedz wprost: "Nie znalazłem tego w sylabusach".
 - Jeśli pytanie ma więcej niż jedną poprawną odpowiedź, na przykład przedmiot występuje na więcej niż jednym kierunku, lub prowadzący zajmuje się więcej niż jednym przedmiotem, lub przedmiot różnił się w poszczególnych rocznikach - wyjaśnij to użytkownikowim, podając wszystkie istotne informacje.
+- Zawsze udzielaj odpowiedzi. Pusta odpowiedź nie jest dozwolona. Jeżeli nie znasz poprawnej odpowiedzi, po prostu przyznaj się do tego.
 - Cytuj numery źródeł w formacie [1], [2] przy konkretnych faktach.
 - Nie zmyślaj nazw przedmiotów, prowadzących, punktów ECTS ani godzin.`;
 
@@ -283,19 +284,26 @@ export const Route = createFileRoute("/api/chat")({
             : "(Brak dopasowanych fragmentów w bazie sylabusów.)";
 
           const client = await openai();
+          const chatModel = await getChatModel();
+          const messages = [
+            { role: "system" as const, content: SYSTEM_PROMPT },
+            ...history.map((h) => ({ role: h.role, content: h.content })),
+            {
+              role: "user" as const,
+              content: `Pytanie: ${body.message}\n\nKontekst (fragmenty sylabusów):\n${context}`,
+            },
+          ];
+          // OpenAI API: max_tokens = total sequence length (prompt + response).
+          // Estimate prompt tokens (chars/4) and add 350 for the response budget.
+          const promptTokens = messages.reduce((s, m) => s + Math.ceil(m.content.length / 3), 0);
+          const maxTokens = promptTokens + 350;
+          console.log("[chat] sending to LLM model=%s sources=%d prompt_tokens~=%d max_tokens=%d", chatModel, sources.length, promptTokens, maxTokens);
           const stream = await client.chat.completions.create({
-            model: await getChatModel(),
+            model: chatModel,
             stream: true,
             temperature: 0.1,
-            max_tokens: 350,
-            messages: [
-              { role: "system", content: SYSTEM_PROMPT },
-              ...history.map((h) => ({ role: h.role, content: h.content })),
-              {
-                role: "user",
-                content: `Pytanie: ${body.message}\n\nKontekst (fragmenty sylabusów):\n${context}`,
-              },
-            ],
+            max_tokens: maxTokens,
+            messages,
           });
 
         const encoder = new TextEncoder();
@@ -309,13 +317,16 @@ export const Route = createFileRoute("/api/chat")({
             try {
               for await (const chunk of stream) {
                 const delta = chunk.choices[0]?.delta?.content || "";
+                const finishReason = chunk.choices[0]?.finish_reason;
                 if (delta) {
                   assistantBuf += delta;
                   controller.enqueue(
                     encoder.encode(`event: delta\ndata: ${JSON.stringify(delta)}\n\n`),
                   );
                 }
+                if (finishReason) console.log("[chat] finish_reason=%s buf_len=%d", finishReason, assistantBuf.length);
               }
+              console.log("[chat] stream done buf_len=%d", assistantBuf.length);
               controller.enqueue(encoder.encode(`event: done\ndata: {}\n\n`));
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err);
