@@ -2,7 +2,7 @@ import "@tanstack/react-start";
 import { createFileRoute } from "@tanstack/react-router";
 import { z } from "zod";
 import { query, toVectorLiteral } from "@/lib/db.server";
-import { openai, getChatModel, embedOne, getLlmConfig } from "@/lib/openai.server";
+import { openai, getChatModel, embedQuery, getLlmConfig } from "@/lib/openai.server";
 
 const Body = z.object({
   session_id: z.string().min(1).max(128),
@@ -47,10 +47,10 @@ Zasady:
 - Odpowiadaj zwięźle, po polsku, w stylu rzeczowym.
 - Jeśli pytanie jest ogólne (np. "hej", "cześć"), przywitaj się krótko po polsku i zapytaj o co konkretnie chodzi — NIE streszczaj kontekstu.
 - Jeśli kontekst nie zawiera odpowiedzi, powiedz wprost: "Nie znalazłem tego w sylabusach".
+- Jeśli pytanie ma więcej niż jedną poprawną odpowiedź, na przykład przedmiot występuje na więcej niż jednym kierunku, lub prowadzący zajmuje się więcej niż jednym przedmiotem, lub przedmiot różnił się w poszczególnych rocznikach - wyjaśnij to użytkownikowim, podając wszystkie istotne informacje.
 - Cytuj numery źródeł w formacie [1], [2] przy konkretnych faktach.
 - Nie zmyślaj nazw przedmiotów, prowadzących, punktów ECTS ani godzin.`;
 
-const MAX_CONTEXT_SOURCES = 3;
 const MAX_CONTEXT_CHARS_PER_SOURCE = 900;
 
 function trimContextChunk(content: string): string {
@@ -60,7 +60,7 @@ function trimContextChunk(content: string): string {
 }
 
 function buildContext(sources: Source[], contents: string[]): string {
-  return sources.slice(0, MAX_CONTEXT_SOURCES)
+  return sources
     .map(
       (s, i) =>
         `[${i + 1}] ${s.course_name} — ${s.faculty} / ${s.field} / sem. ${s.semester}\n${trimContextChunk(contents[i] ?? "")}`,
@@ -165,9 +165,9 @@ export const Route = createFileRoute("/api/chat")({
 
           let rows: MatchRow[] = [];
 
-          const qVec = await embedOne(body.message);
+          const qVec = await embedQuery(body.message);
           const cfg = await getLlmConfig();
-          const topK = Math.min(cfg.topK, MAX_CONTEXT_SOURCES);
+          const topK = cfg.topK;
 
           if (body.filters?.syllabus_id) {
             rows = await query<MatchRow>(
@@ -238,7 +238,7 @@ export const Route = createFileRoute("/api/chat")({
                     AND ($3::text IS NULL OR s.field = $3)
                     AND ($4::text IS NULL OR s.semester = $4)
                   ORDER BY c.embedding <=> $1::vector
-                  LIMIT ${MAX_CONTEXT_SOURCES}`,
+                  LIMIT ${topK}`,
                 params,
               );
             }
@@ -260,7 +260,7 @@ export const Route = createFileRoute("/api/chat")({
               if (seen.has(r.id)) continue;
               seen.add(r.id);
               rows.push(r);
-              if (rows.length >= MAX_CONTEXT_SOURCES) break;
+              if (rows.length >= topK) break;
             }
           }
 

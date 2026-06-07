@@ -1,5 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import { readFile } from "fs/promises";
+import { resolve } from "path";
 import { query, queryOne, toVectorLiteral } from "./db.server";
 import { savePdf, deletePdf, readPdf } from "./storage.server";
 import { pdfToText } from "./pdf.server";
@@ -499,3 +501,77 @@ export const ingestFaculty = createServerFn({ method: "POST" })
       programs,
     };
   });
+
+export const deleteSyllabiByFaculty = createServerFn({ method: "POST" })
+  .inputValidator((d: unknown) => z.object({ faculty: z.string().min(1) }).parse(d))
+  .handler(async ({ data }) => {
+    const rows = await query<{ id: string; pdf_path: string | null }>(
+      `DELETE FROM syllabi WHERE faculty = $1 RETURNING id, pdf_path`,
+      [data.faculty],
+    );
+    for (const r of rows) {
+      if (r.pdf_path) await deletePdf(r.pdf_path).catch(() => {});
+    }
+    return { deleted: rows.length };
+  });
+
+export const deleteSyllabiByProgram = createServerFn({ method: "POST" })
+  .inputValidator((d: unknown) =>
+    z.object({
+      faculty: z.string().min(1),
+      field: z.string().min(1),
+      level: z.string().nullable(),
+      form: z.string().nullable(),
+      cycle: z.string().nullable(),
+    }).parse(d),
+  )
+  .handler(async ({ data }) => {
+    const rows = await query<{ id: string; pdf_path: string | null }>(
+      `DELETE FROM syllabi
+        WHERE faculty = $1 AND field = $2
+          AND ((level IS NULL AND $3::text IS NULL) OR level = $3)
+          AND ((form  IS NULL AND $4::text IS NULL) OR form  = $4)
+          AND ((cycle IS NULL AND $5::text IS NULL) OR cycle = $5)
+        RETURNING id, pdf_path`,
+      [data.faculty, data.field, data.level, data.form, data.cycle],
+    );
+    for (const r of rows) {
+      if (r.pdf_path) await deletePdf(r.pdf_path).catch(() => {});
+    }
+    return { deleted: rows.length };
+  });
+
+type KierunkiJson = Record<string, { kierunki: { url: string }[] }[]>;
+
+export const startBulkImport = createServerFn({ method: "POST" }).handler(async () => {
+  const raw = await readFile(resolve(process.cwd(), "kierunki.json"), "utf-8");
+  const data: KierunkiJson = JSON.parse(raw);
+
+  const seen = new Set<string>();
+  const urls: string[] = [];
+  for (const yearData of Object.values(data)) {
+    for (const faculty of yearData) {
+      for (const k of faculty.kierunki) {
+        if (!seen.has(k.url)) {
+          seen.add(k.url);
+          urls.push(k.url);
+        }
+      }
+    }
+  }
+
+  const total = urls.length;
+  // Fire-and-forget: runs in background, does not block the HTTP response.
+  ;(async () => {
+    for (const url of urls) {
+      try {
+        await ingestProgramByUrl(url, null, true);
+      } catch (e) {
+        console.error("[bulk-import]", url, e instanceof Error ? e.message : e);
+      }
+    }
+    console.log(`[bulk-import] completed all ${total} programs`);
+  })().catch(console.error);
+
+  return { started: true, total };
+});

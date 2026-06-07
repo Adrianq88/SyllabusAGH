@@ -65,13 +65,15 @@ CREATE INDEX IF NOT EXISTS chat_messages_session_idx ON chat_messages(session_id
 -- app_settings: pojedynczy wiersz (id=1) z konfiguracją LLM zarządzaną z /admin
 -- =====================================================================
 CREATE TABLE IF NOT EXISTS app_settings (
-  id            integer PRIMARY KEY DEFAULT 1 CHECK (id = 1),
-  llm_base_url  text,
-  llm_api_key   text,
-  chat_model    text,
-  embed_model   text,
-  top_k         integer NOT NULL DEFAULT 15,
-  updated_at    timestamptz NOT NULL DEFAULT now()
+  id              integer PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  llm_base_url    text,
+  llm_api_key     text,
+  chat_model      text,
+  embed_model     text,
+  embed_base_url  text,
+  embed_api_key   text,
+  top_k           integer NOT NULL DEFAULT 15,
+  updated_at      timestamptz NOT NULL DEFAULT now()
 );
 
 INSERT INTO app_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;

@@ -5,11 +5,14 @@ import { useState } from "react";
 import {
   listSyllabi,
   deleteSyllabus,
+  deleteSyllabiByFaculty,
+  deleteSyllabiByProgram,
   reprocessSyllabus,
   discoverProgramPreview,
   ingestProgram,
   discoverFacultyPreview,
   ingestFaculty,
+  startBulkImport,
 } from "@/lib/syllabi.functions";
 import { getSettings, updateSettings } from "@/lib/settings.functions";
 import { Button } from "@/components/ui/button";
@@ -90,11 +93,14 @@ function AdminPage() {
   const qc = useQueryClient();
   const list = useServerFn(listSyllabi);
   const del = useServerFn(deleteSyllabus);
+  const delByFaculty = useServerFn(deleteSyllabiByFaculty);
+  const delByProgram = useServerFn(deleteSyllabiByProgram);
   const re = useServerFn(reprocessSyllabus);
   const disc = useServerFn(discoverProgramPreview);
   const ingProg = useServerFn(ingestProgram);
   const discFac = useServerFn(discoverFacultyPreview);
   const ingFac = useServerFn(ingestFaculty);
+  const bulkImport = useServerFn(startBulkImport);
 
   const { data, isLoading } = useQuery({
     queryKey: ["syllabi"],
@@ -114,6 +120,18 @@ function AdminPage() {
   const [importResults, setImportResults] = useState<
     { course_name: string; status: "ok" | "skipped" | "error"; error?: string }[]
   >([]);
+
+  const [bulkStarted, setBulkStarted] = useState<{ total: number } | null>(null);
+
+  const bulkImportMut = useMutation({
+    mutationFn: async () => {
+      const r = await bulkImport();
+      setBulkStarted({ total: r.total });
+      toast.success(`Import uruchomiony w tle — ${r.total} unikalnych kierunków w kolejce.`);
+      qc.invalidateQueries({ queryKey: ["syllabi"] });
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
 
   const [facultyUrl, setFacultyUrl] = useState(
     "https://sylabusy.agh.edu.pl/pl/1/2/22/0/0/63",
@@ -220,6 +238,36 @@ function AdminPage() {
 
       <main className="max-w-5xl mx-auto px-4 py-6 space-y-6">
         <LlmSettingsCard />
+
+        <Card className="p-4 space-y-3">
+          <h2 className="font-semibold">Import zbiorczy — wszystkie kierunki AGH</h2>
+          <p className="text-xs text-muted-foreground">
+            Importuje wszystkie kierunki ze wszystkich wydziałów i lat akademickich z pliku
+            <code className="mx-1">kierunki.json</code> dołączonego do projektu.
+            Już zaindeksowane sylabusów (status <code>ready</code>) są pomijane.
+            Import działa w tle — lista poniżej odświeża się co 4 s.
+          </p>
+          <div className="rounded-md border border-yellow-300 bg-yellow-50 px-3 py-2 text-xs text-yellow-800">
+            ⚠️ Importuj wszystkie kierunki na dzień 7.06.2026 — dane mogą być nieaktualne dla nowszych cykli.
+          </div>
+          {bulkStarted && (
+            <p className="text-xs text-muted-foreground">
+              Import uruchomiony · {bulkStarted.total} unikalnych URL w kolejce · postęp widoczny w liście sylabusów poniżej.
+            </p>
+          )}
+          <Button
+            onClick={() => bulkImportMut.mutate()}
+            disabled={bulkImportMut.isPending || !!bulkStarted}
+          >
+            {bulkImportMut.isPending ? (
+              <><Loader2 className="h-4 w-4 animate-spin mr-2" />Uruchamiam…</>
+            ) : bulkStarted ? (
+              "Import uruchomiony w tle"
+            ) : (
+              "Importuj wszystkie kierunki AGH"
+            )}
+          </Button>
+        </Card>
 
         <Card className="p-4 space-y-3">
           <h2 className="font-semibold">Importuj cały kierunek z sylabusy.agh.edu.pl</h2>
@@ -477,6 +525,23 @@ function AdminPage() {
                     {fac.programs.length}{" "}
                     {fac.programs.length === 1 ? "kierunek" : "kierunków"}
                   </span>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    title={`Usuń cały wydział (${fac.total})`}
+                    className="h-7 w-7 p-0 text-destructive hover:text-destructive"
+                    onClick={async (e) => {
+                      e.preventDefault();
+                      if (!confirm(`Usunąć wszystkie ${fac.total} sylabusów wydziału "${fac.faculty}"?`)) return;
+                      try {
+                        const r = await delByFaculty({ data: { faculty: fac.faculty } });
+                        toast.success(`Usunięto ${r.deleted} sylabusów`);
+                        qc.invalidateQueries({ queryKey: ["syllabi"] });
+                      } catch (e) { toast.error(e instanceof Error ? e.message : String(e)); }
+                    }}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
                 </summary>
                 <div className="border-t p-2 space-y-2">
                   {fac.programs.map((g) => (
@@ -492,6 +557,31 @@ function AdminPage() {
                           {g.semesters.length}{" "}
                           {g.semesters.length === 1 ? "semestr" : "semestry"}
                         </span>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          title={`Usuń cały kierunek (${g.total})`}
+                          className="h-7 w-7 p-0 text-destructive hover:text-destructive"
+                          onClick={async (e) => {
+                            e.preventDefault();
+                            const sample = g.semesters[0]?.items[0];
+                            if (!sample) return;
+                            if (!confirm(`Usunąć wszystkie ${g.total} sylabusów kierunku "${g.label}"?`)) return;
+                            try {
+                              const r = await delByProgram({ data: {
+                                faculty: fac.faculty,
+                                field: sample.field,
+                                level: sample.level ?? null,
+                                form: sample.form ?? null,
+                                cycle: sample.cycle ?? null,
+                              }});
+                              toast.success(`Usunięto ${r.deleted} sylabusów`);
+                              qc.invalidateQueries({ queryKey: ["syllabi"] });
+                            } catch (e) { toast.error(e instanceof Error ? e.message : String(e)); }
+                          }}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
                       </summary>
 
                       <div className="divide-y border-t">
@@ -583,14 +673,22 @@ function AdminPage() {
 }
 
 const CHAT_MODEL_PRESETS = [
-  { group: "Ollama (lokalnie)", items: ["gemma2:2b", "gemma2:9b", "llama3.2:3b", "llama3.1:8b", "qwen2.5:3b", "mistral:7b"] },
+  { group: "Ollama (lokalnie)", items: ["gemma2:2b", "gemma2:9b", "gemma4:26b", "llama3.2:3b", "llama3.1:8b", "qwen2.5:3b", "mistral:7b", "SpeakLeash/bielik-11b-v3.0-instruct:Q4_K_M"] },
   { group: "OpenAI", items: ["gpt-5-nano", "gpt-5-mini", "gpt-5", "gpt-4o-mini"] },
   { group: "Groq", items: ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"] },
 ];
 
 const EMBED_MODEL_PRESETS = [
-  { group: "Ollama (768 dim)", items: ["nomic-embed-text", "mxbai-embed-large"] },
+  { group: "Ollama (768 dim)", items: ["nomic-embed-text"] },
+  { group: "Ollama (1024 dim)", items: ["mxbai-embed-large", "bge-large", "snowflake-arctic-embed"] },
+  { group: "TEI / HuggingFace", items: ["sdadas/mmlw-retrieval-roberta-large-v2"] },
   { group: "OpenAI", items: ["text-embedding-3-small", "text-embedding-3-large"] },
+];
+
+const EMBED_BASE_URL_PRESETS = [
+  { label: "TEI (lokalnie)", url: "http://tei:80/v1" },
+  { label: "Ollama (lokalnie)", url: "http://ollama:11434/v1" },
+  { label: "OpenAI", url: "https://api.openai.com/v1" },
 ];
 
 const BASE_URL_PRESETS = [
@@ -613,6 +711,8 @@ function LlmSettingsCard() {
   const [apiKey, setApiKey] = useState("");
   const [chatModel, setChatModel] = useState("");
   const [embedModel, setEmbedModel] = useState("");
+  const [embedBaseURL, setEmbedBaseURL] = useState("");
+  const [embedApiKey, setEmbedApiKey] = useState("");
   const [topK, setTopK] = useState(15);
   const [hydrated, setHydrated] = useState(false);
 
@@ -620,6 +720,7 @@ function LlmSettingsCard() {
     setBaseURL(data.llm_base_url);
     setChatModel(data.chat_model);
     setEmbedModel(data.embed_model);
+    setEmbedBaseURL(data.embed_base_url);
     setTopK(data.top_k);
     setHydrated(true);
   }
@@ -629,10 +730,11 @@ function LlmSettingsCard() {
       await upd({
         data: {
           llm_base_url: baseURL.trim() || null,
-          // pusty klucz = nie zmieniaj (wstaw placeholder żeby walidacja przeszła)
           llm_api_key: apiKey.trim() || (data?.llm_api_key_masked ? "__keep__" : null),
           chat_model: chatModel.trim() || null,
           embed_model: embedModel.trim() || null,
+          embed_base_url: embedBaseURL.trim() || null,
+          embed_api_key: embedApiKey.trim() || (data?.embed_api_key_masked ? "__keep__" : null),
           top_k: Math.max(1, Math.min(50, Math.round(topK) || 15)),
         },
       });
@@ -640,6 +742,7 @@ function LlmSettingsCard() {
     onSuccess: () => {
       toast.success("Zapisano ustawienia. Nowa konfiguracja wejdzie w życie w ciągu 5s.");
       setApiKey("");
+      setEmbedApiKey("");
       qc.invalidateQueries({ queryKey: ["llm-settings"] });
     },
     onError: (e: Error) => toast.error(e.message),
@@ -716,7 +819,7 @@ function LlmSettingsCard() {
         </div>
 
         <div className="space-y-1">
-          <Label>Model embeddingów (musi zwracać 768 wymiarów)</Label>
+          <Label>Model embeddingów (liczba wymiarów wykrywana automatycznie)</Label>
           <Input value={embedModel} onChange={(e) => setEmbedModel(e.target.value)} placeholder="nomic-embed-text" list="embed-models" />
           <datalist id="embed-models">
             {EMBED_MODEL_PRESETS.flatMap((g) => g.items).map((m) => (
@@ -743,6 +846,49 @@ function LlmSettingsCard() {
                 </div>
               </details>
             ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="border-t pt-3 space-y-2">
+        <p className="text-xs font-medium text-muted-foreground">
+          Osobny endpoint embeddingów (opcjonalnie) — jeśli pusty, używa Base URL / API Key z góry.
+        </p>
+        <div className="grid md:grid-cols-2 gap-3">
+          <div className="space-y-1">
+            <Label>Embed Base URL</Label>
+            <Input
+              value={embedBaseURL}
+              onChange={(e) => setEmbedBaseURL(e.target.value)}
+              placeholder="(dziedzicz z Base URL powyżej)"
+              list="embed-base-urls"
+            />
+            <datalist id="embed-base-urls">
+              {EMBED_BASE_URL_PRESETS.map((p) => (
+                <option key={p.url} value={p.url} />
+              ))}
+            </datalist>
+            <div className="flex flex-wrap gap-1 pt-1">
+              {EMBED_BASE_URL_PRESETS.map((p) => (
+                <button
+                  key={p.url}
+                  type="button"
+                  onClick={() => setEmbedBaseURL(p.url)}
+                  className="text-[10px] px-2 py-0.5 rounded border hover:bg-muted"
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="space-y-1">
+            <Label>Embed API Key</Label>
+            <Input
+              type="password"
+              value={embedApiKey}
+              onChange={(e) => setEmbedApiKey(e.target.value)}
+              placeholder={data?.embed_api_key_masked ? `aktualnie: ${data.embed_api_key_masked} (zostaw puste = bez zmian)` : "(dziedzicz z API Key powyżej)"}
+            />
           </div>
         </div>
       </div>

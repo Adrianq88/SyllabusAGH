@@ -3,12 +3,14 @@
 # Uruchomienie:
 #   cp .env.example .env
 #   docker compose up --build
-#   # ściągnij modele (jednorazowo, ~3.5 GB):
-#   docker compose exec ollama ollama pull qwen2.5:3b
-#   docker compose exec ollama ollama pull nomic-embed-text
+#   # ściągnij modele czatu przez Ollama (jednorazowo):
+#   docker compose exec ollama ollama pull gemma4:26b
+#   # TEI pobiera model embeddingów (sdadas/mmlw ~1.3 GB) automatycznie przy starcie.
+#   # Żeby używać Ollamy do embeddingów zamiast TEI — odkomentuj EMBED_* w .env
+#   # i usuń serwis tei z depends_on w app.
 #   # otwórz http://localhost:8080
 #
-# Trzy usługi: postgres (baza + pgvector), ollama (lokalny LLM), app (Node/TanStack Start).
+# Cztery usługi: postgres (baza + pgvector), ollama (czat LLM), tei (embeddingi), app.
 
 services:
   postgres:
@@ -47,6 +49,25 @@ services:
     #           count: all
     #           capabilities: [gpu]
 
+  tei:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9
+    container_name: sylabus-tei
+    restart: unless-stopped
+    command: --model-id sdadas/mmlw-retrieval-roberta-large-v2 --port 80
+    ports:
+      - "8082:80"
+    volumes:
+      - tei-data:/data
+    # GPU - TYLKO RTX 40xx - dla innych patrz dokumentacja na GitHub
+    # image: ghcr.io/huggingface/text-embeddings-inference:89-1.9
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
   app:
     build:
       context: .
@@ -58,6 +79,8 @@ services:
         condition: service_healthy
       ollama:
         condition: service_started
+      tei:
+        condition: service_started
     ports:
       - "${PORT:-8080}:8080"
     env_file:
@@ -66,9 +89,11 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER:-sylabus}:${POSTGRES_PASSWORD:-sylabus}@postgres:5432/${POSTGRES_DB:-sylabus}
       LLM_BASE_URL: ${LLM_BASE_URL:-http://ollama:11434/v1}
       LLM_API_KEY: ${LLM_API_KEY:-ollama}
-      CHAT_MODEL: ${CHAT_MODEL:-qwen2.5:3b}
-      EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text}
-      TOP_K: ${TOP_K:-5}
+      CHAT_MODEL: ${CHAT_MODEL:-gemma4:26b}
+      EMBED_BASE_URL: ${EMBED_BASE_URL:-http://tei:80/v1}
+      EMBED_API_KEY: ${EMBED_API_KEY:-tei}
+      EMBED_MODEL: ${EMBED_MODEL:-sdadas/mmlw-retrieval-roberta-large-v2}
+      TOP_K: ${TOP_K:-15}
       PDF_STORAGE_DIR: /data/pdfs
       PORT: "8080"
       NODE_ENV: production
@@ -78,3 +103,4 @@ services:
 volumes:
   pg-data:
   ollama-data:
+  tei-data:

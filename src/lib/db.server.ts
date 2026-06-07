@@ -42,3 +42,17 @@ export async function queryOne<T extends QueryResultRow = QueryResultRow>(
 export function toVectorLiteral(vec: number[]): string {
   return `[${vec.join(",")}]`;
 }
+
+let _migrationsRan = false;
+
+export async function runStartupMigrations(): Promise<void> {
+  if (_migrationsRan) return;
+  _migrationsRan = true;
+  try {
+    await query(`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS embed_base_url text`);
+    await query(`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS embed_api_key text`);
+  } catch (e) {
+    console.error("[db] startup migration failed:", e);
+    _migrationsRan = false;
+  }
+}

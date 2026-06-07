@@ -85,12 +85,21 @@ const EXAMPLES = [
   "Jaka jest forma zaliczenia z Teorii obwodów 1?",
 ];
 
+function uuid(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function")
+    return uuid();
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    return (c === "x" ? r : (r & 0x3) | 0x8).toString(16);
+  });
+}
+
 function newSessionId() {
   if (typeof window === "undefined") return "ssr";
   const k = "asksylabus.session";
   let s = localStorage.getItem(k);
   if (!s) {
-    s = crypto.randomUUID();
+    s = uuid();
     localStorage.setItem(k, s);
   }
   return s;
@@ -154,7 +163,12 @@ function ChatPage() {
     }
     return Array.from(map.entries())
       .map(([key, i]) => ({ key, label: programLabel(i), sample: i }))
-      .sort((a, b) => a.label.localeCompare(b.label));
+      .sort((a, b) => {
+        const cA = a.sample.cycle ?? "";
+        const cB = b.sample.cycle ?? "";
+        if (cA !== cB) return cB.localeCompare(cA);
+        return a.label.localeCompare(b.label, "pl");
+      });
   }, [items]);
 
   const selectedProgram = useMemo(
@@ -215,8 +229,9 @@ function ChatPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const isAllSelected = filters.program_key === "__all__";
   // Program is "pending" when URL set program_key but catalog hasn't loaded yet.
-  const pendingProgram = !!filters.program_key && !selectedProgram && catalogLoading;
+  const pendingProgram = !!filters.program_key && !isAllSelected && !selectedProgram && catalogLoading;
 
   async function send() {
     const q = input.trim();
@@ -225,13 +240,13 @@ function ChatPage() {
       setFilterOpen(true);
       return;
     }
-    // Derive field from program_key (format: field|level|form|cycle) when catalog not yet loaded.
-    const field =
-      selectedProgram?.sample.field ??
-      (filters.program_key ? filters.program_key.split("|")[0] : "");
+    const field = isAllSelected
+      ? null
+      : (selectedProgram?.sample.field ??
+         (filters.program_key ? filters.program_key.split("|")[0] : ""));
     setInput("");
-    const userMsg: Msg = { id: crypto.randomUUID(), role: "user", content: q };
-    const assistantId = crypto.randomUUID();
+    const userMsg: Msg = { id: uuid(), role: "user", content: q };
+    const assistantId = uuid();
     setMessages((m) => [...m, userMsg, { id: assistantId, role: "assistant", content: "" }]);
     setLoading(true);
 
@@ -304,6 +319,8 @@ function ChatPage() {
 
   const filterLabel = pendingProgram
     ? "Wczytuję kierunek…"
+    : isAllSelected
+    ? "Wszystkie syllabusy"
     : selectedCourse
     ? selectedCourse.course_name
     : selectedProgram?.label ?? "— wybierz kierunek —";
@@ -447,11 +464,11 @@ function ChatPage() {
             <Popover open={filterOpen} onOpenChange={setFilterOpen}>
               <PopoverTrigger asChild>
                 <Button
-                  variant={selectedProgram || pendingProgram ? "default" : "outline"}
+                  variant={selectedProgram || pendingProgram || isAllSelected ? "default" : "outline"}
                   size="sm"
                   className={
                     "h-8 text-xs gap-1.5 " +
-                    (!selectedProgram && !pendingProgram
+                    (!selectedProgram && !pendingProgram && !isAllSelected
                       ? "ring-2 ring-primary/40 animate-pulse"
                       : "")
                   }
@@ -463,6 +480,8 @@ function ChatPage() {
                   )}
                   {pendingProgram ? (
                     <span>Wczytuję kierunek…</span>
+                  ) : isAllSelected ? (
+                    <span>Wszystkie syllabusy</span>
                   ) : selectedCourse ? (
                     <>
                       <span className="max-w-[200px] truncate">
@@ -497,6 +516,7 @@ function ChatPage() {
                       <SelectValue placeholder="Wybierz kierunek…" />
                     </SelectTrigger>
                     <SelectContent>
+                      <SelectItem value="__all__">Wszystkie syllabusy</SelectItem>
                       {programs.length === 0 && (
                         <div className="px-2 py-1.5 text-xs text-muted-foreground">
                           Brak zaindeksowanych kierunków.
@@ -511,7 +531,7 @@ function ChatPage() {
                   </Select>
                 </div>
 
-                <div className="space-y-1.5">
+                {!isAllSelected && <div className="space-y-1.5">
                   <label className="text-xs font-medium text-muted-foreground">
                     Przedmiot (opcjonalnie)
                   </label>
@@ -546,7 +566,7 @@ function ChatPage() {
                       ))}
                     </SelectContent>
                   </Select>
-                </div>
+                </div>}
 
                 {(filters.program_key || filters.syllabus_id) && (
                   <Button
@@ -567,7 +587,7 @@ function ChatPage() {
               Kontekst:{" "}
               <span
                 className={
-                  selectedProgram || pendingProgram
+                  selectedProgram || pendingProgram || isAllSelected
                     ? "font-medium text-foreground"
                     : "text-destructive"
                 }

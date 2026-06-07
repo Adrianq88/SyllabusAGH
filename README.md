@@ -35,10 +35,10 @@ docker compose up --build -d       # pierwsze uruchomienie: ~3-5 min
 
 Startuje 3 usługi: `postgres` (baza + pgvector), `ollama` (lokalny LLM), `app` (TanStack Start).
 
-**4. Pobierz modele Ollamy (jednorazowo, ~3.5 GB)**
+**4. Pobierz modele Ollamy (jednorazowo, ~20 GB)**
 
 ```bash
-docker compose exec ollama ollama pull qwen2.5:3b
+docker compose exec ollama ollama pull gemma4:26b
 docker compose exec ollama ollama pull nomic-embed-text
 ```
 
@@ -53,9 +53,9 @@ Po `docker compose up` sprawdź, że wszystko gra:
 - [ ] `docker compose ps` — trzy usługi w stanie `running` / `healthy`
 - [ ] http://localhost:8080 — ładuje się strona czatu
 - [ ] http://localhost:8080/admin — ładuje się panel administracyjny
-- [ ] `curl http://localhost:11434/api/tags` — Ollama odpowiada listą pobranych modeli (musi zawierać `qwen2.5:3b` i `nomic-embed-text`)
+- [ ] `curl http://localhost:11434/api/tags` — Ollama odpowiada listą pobranych modeli (musi zawierać `gemma4:26b` i `nomic-embed-text`)
 - [ ] `docker compose exec postgres psql -U sylabus -d sylabus -c "\dt"` — widać tabele `syllabi`, `syllabus_chunks`, `chat_messages`, `app_settings`
-- [ ] W `/admin` → "Ustawienia LLM" pola są wypełnione (`http://ollama:11434/v1`, `qwen2.5:3b`, `nomic-embed-text`)
+- [ ] W `/admin` → "Ustawienia LLM" pola są wypełnione (`http://ollama:11434/v1`, `gemma4:26b`, `nomic-embed-text`)
 
 Jeśli któryś krok nie przechodzi → `docker compose logs <usługa>` (np. `docker compose logs app`).
 
